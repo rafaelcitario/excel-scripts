@@ -1,21 +1,20 @@
 import { exec } from 'child_process';
-import fs from 'fs';
+import fs from 'fs/promises';
 import xlsx from 'node-xlsx';
+import pLimit from 'p-limit';
 
 export interface IAccountObj {
   id: string;
   data: { [x: string]: Object; };
 };
 
-
-
-export function jsonfyDataExcel ( arquivoParaConversao: string, numeroDeArquivosConvertidos: number = 0 ) {
+export async function jsonfyDataExcel ( arquivoParaConversao: string, numeroDeArquivosConvertidos: number = 0 ) {
   const workSheetFromFile = xlsx.parse( `./src/plurix/excelFiles/${arquivoParaConversao}` );
   const account: IAccountObj[] = [];
 
-  numeroDeArquivosConvertidos <= 0 ? workSheetFromFile[0].data.length : numeroDeArquivosConvertidos++;
+  const numFiles = numeroDeArquivosConvertidos <= 0 ? workSheetFromFile[0].data.length : numeroDeArquivosConvertidos + 1;
 
-  for ( let i = 1; i < numeroDeArquivosConvertidos; i++ ) {
+  for ( let i = 1; i < numFiles; i++ ) {
     const line = workSheetFromFile[0].data[i];
     const accountObj: IAccountObj = {
       id: line[1],
@@ -35,52 +34,59 @@ export function jsonfyDataExcel ( arquivoParaConversao: string, numeroDeArquivos
 }
 
 
-function checkAndCreateDirectory ( nomeDaPasta: string, callback: Function ) {
+async function checkAndCreateDirectory ( nomeDaPasta: string ): Promise<void> {
   const directoryPath = `./src/plurix/files/${nomeDaPasta}`;
 
-  fs.access( directoryPath, ( err ) => {
-    if ( !err ) {
+  try {
+    await fs.access( directoryPath );
+    console.log( 'Diretório já existe!' );
+  } catch ( err ) {
+    const command = process.platform === 'win32'
+      ? `mkdir "${directoryPath}"`
+      : `mkdir -p ${directoryPath}`;
 
-      console.log( 'Diretório já existe!' );
-      callback();
-    } else {
-
-      const command = process.platform === 'win32'
-        ? `mkdir "${directoryPath}"`
-        : `mkdir -p ${directoryPath}`;
-
+    await new Promise<void>( ( resolve, reject ) => {
       exec( command, ( err, stdout, stderr ) => {
         if ( err ) {
-          console.error( `Erro ao criar diretório: ${stderr}` );
-          return;
+          reject( `Erro ao criar diretório: ${stderr}` );
+        } else {
+          console.log( 'Diretório criado com sucesso!' );
+          resolve();
         }
-        console.log( 'Diretório criado com sucesso!' );
-        callback();
-      } );
-    }
-  } );
-}
-
-
-function createJsonDataExcel ( arquivoParaConversao: string, numeroDeArquivosConvertidos: number = 0, nomeDaPasta: string ) {
-
-  checkAndCreateDirectory( nomeDaPasta, () => {
-    const jsonData = jsonfyDataExcel( arquivoParaConversao, numeroDeArquivosConvertidos );
-
-    jsonData.forEach( ( data ) => {
-      const filePath = `./src/plurix/files/${nomeDaPasta}/${data.id}.json`;
-
-
-      fs.writeFile( filePath, JSON.stringify( data ), 'utf-8', ( err ) => {
-        if ( err ) {
-          console.error( `Erro ao salvar o arquivo ${filePath}:`, err );
-          return;
-        }
-        console.log( `Arquivo ${filePath} salvo com sucesso!` );
       } );
     } );
-  } );
+  }
 }
 
 
-createJsonDataExcel( "Histórico de registros do objeto caso.xlsx", 3, "cases" );
+async function createJsonDataExcel ( arquivoParaConversao: string, nomeDaPasta: string, numeroDeArquivosConvertidos: number = 0 ) {
+  try {
+    await checkAndCreateDirectory( nomeDaPasta );
+    const jsonData = await jsonfyDataExcel( arquivoParaConversao, numeroDeArquivosConvertidos );
+
+
+    const limit = pLimit( 100 );
+
+
+    const writePromises = jsonData.map( ( data ) =>
+      limit( async () => {
+        const filePath = `./src/plurix/files/${nomeDaPasta}/${data.id}.json`;
+        await fs.writeFile( filePath, JSON.stringify( data ), 'utf-8' );
+        console.log( `Arquivo ${filePath} salvo com sucesso!` );
+      } )
+    );
+
+
+    await Promise.all( writePromises );
+
+  } catch ( error ) {
+    console.error( 'Erro ao processar os arquivos:', error );
+  }
+}
+
+
+createJsonDataExcel( "Histórico de registros do objeto caso.xlsx", "cases", 0 );
+createJsonDataExcel( "Histórico dos registros do objeto Conta.xlsx", "accounts", 0 );
+createJsonDataExcel( "Histórico dos registros do objeto contato.xlsx", "contacts", 0 );
+createJsonDataExcel( "Histórico dos registros do objeto histórico do caso.xlsx", "caseHistory", 0 );
+createJsonDataExcel( "Histórico dos registros do objeto transcrições de chat.xlsx", "transcription", 0 );
